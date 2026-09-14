@@ -5,5 +5,7 @@ agents:
   - test-bravo
   # in the registry, not in the roster: the unringable case
   - test-charlie
+  # the publisher for publish:* requests (phase 2.4). In the registry, NEVER in the roster.
+  - ops-dev
   - urb-agents-maintainer
   - terje
