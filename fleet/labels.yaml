@@ -1,0 +1,157 @@
+# The label taxonomy for the Issues bus. DECLARED here, applied by
+# ops/bus/labels-sync.sh --apply, checked by --check.
+#
+# WHY THIS FILE EXISTS. Under the Issues bus the labels are not decoration: `to:`
+# is the routing that replaces the mailbox directory, and `state:` is the task
+# state that replaced status.state. A verified fact from 2026-09-01 makes the
+# declaration mandatory rather than tidy — a token with Issues:write, which is the
+# profile every agent gets, CAN create and delete label definitions (201 and 204
+# observed during the PAT split test). So any agent can rename or delete a label
+# and silently rewrite every task's state. This file plus the sync script is the
+# guard: the taxonomy is code-reviewed, and restorable after an accident.
+#
+# Rung C2 (one GitHub App per agent — INVESTIGATE-fleet-cli Q7) is the real fix.
+# Until then this is detection and restoration, not prevention. See
+# INVESTIGATE-issues-bus.
+#
+# AGENT IDS ARE NOT LISTED HERE. They are generated from fleet/registry.yaml, so
+# onboarding an agent cannot silently miss its labels. Add an agent to the
+# registry, run --apply.
+
+version: 2
+
+# One hue per family, so a board is readable without reading.
+families:
+  to:
+    color: "0e8a16"          # green — routing: who must act
+    description: "Recipient. Their inbox is: open issues labeled to:<id>."
+  from:
+    color: "c5def5"          # pale blue — provenance, never actionable
+    description: "Sender. Asserted by the agent; corroborated by the timeline actor where possible."
+
+# Exactly ONE non-terminal state label is present at a time. Terminal state is the
+# issue being CLOSED plus the matching state label, so all four outcomes stay
+# searchable after closing.
+#
+# `rings:` IS THE DOORBELL POLICY, declared (PLAN-P001, protocol-v1). Who is woken
+# when a task ENTERS this state: `recipient` (the to: label), `sender` (the from:
+# label), `human` (nobody is rung; the driver escalates to the operator on a
+# schedule), or `none`. The accessor, the enforcer, the doorbell and the v2 client
+# read this; none of them carries a second copy. Until the deployed doorbell reads
+# it, lib/doorbell.sh implements the same table explicitly and the selftest checks
+# the two agree.
+states:
+  - name: "state:submitted"
+    color: "ededed"
+    terminal: false
+    rings: recipient
+    description: "Accepted, not yet started. The issue is open."
+  - name: "state:working"
+    color: "1d76db"
+    terminal: false
+    rings: none
+    description: "The recipient is working it. The issue is open."
+  - name: "state:done"
+    color: "c2e0c6"
+    terminal: false
+    rings: sender
+    description: "Recipient finished. Sender accepts (close completed) or sends it back (working). Issue open."
+  - name: "state:input-required"
+    color: "fbca04"
+    terminal: false
+    rings: sender
+    description: "The recipient is blocked and needs something from the sender. The issue is open."
+  - name: "state:auth-required"
+    color: "b60205"
+    terminal: false
+    hold: true
+    rings: human
+    description: "HOLD - waiting on a human: a decision, input or authorization. Only a human clears it."
+  - name: "state:completed"
+    color: "0e8a16"
+    terminal: true
+    close_reason: "completed"
+    rings: none
+    description: "Terminal. Issue closed as completed."
+  - name: "state:failed"
+    color: "d93f0b"
+    terminal: true
+    close_reason: "not_planned"
+    rings: sender
+    description: "Terminal. Issue closed as not planned."
+  - name: "state:canceled"
+    color: "6a737d"
+    terminal: true
+    close_reason: "not_planned"
+    rings: none
+    description: "Terminal. Issue closed as not planned."
+  - name: "state:rejected"
+    color: "6a737d"
+    terminal: true
+    close_reason: "not_planned"
+    rings: sender
+    description: "Terminal. Issue closed as not planned."
+
+extra:
+  - name: "invalid"
+    color: "e4e669"
+    description: "Malformed task: front-matter failed validation. No doorbell was sent."
+
+  # MEDIATED PUBLISH (PLAN-B005 phase 1). These three are what makes a read-only
+  # repository token survivable. They are `extra`, not a family, because their
+  # suffix is a KIND and not an agent id — families are generated per registry id.
+  #
+  # The rule that makes mediation safe is not in the label, it is in the writer:
+  # ops derives the destination path from the KIND and the `from:` label, and never
+  # from anything the requesting agent supplies. `publish:host` is the one
+  # exception, and it is confined to a strict basename under fleet/hosts/ because a
+  # host id genuinely is not derivable from an agent id — tecMacDev carries several
+  # agents.
+  - name: "publish:status"
+    color: "5319e7"
+    description: "Asks ops to commit fleet/status/<from>.md. Path derived, never supplied."
+  - name: "publish:card"
+    color: "5319e7"
+    description: "Asks ops to commit fleet/agent-cards/<from>.yaml. Path derived, never supplied."
+  - name: "publish:host"
+    color: "5319e7"
+    description: "Asks ops to commit fleet/hosts/<id>.yaml. Basename validated and confined."
+
+# The legal state machine, recorded here so the accessor and the enforcer agree on
+# one definition rather than each carrying its own.
+#
+# WHO MAY SET WHAT (D3, answered 2026-09-04; done and the hold added by PLAN-P001):
+#   completed, canceled       the SENDER (or ops)
+#   failed, rejected          the RECIPIENT (or ops)
+#   done, input-required      the RECIPIENT only — both ring the sender, so a sender
+#                             setting them would ring itself
+#   auth-required             either party, WITH a comment saying what the human must do
+#   leaving auth-required     a human's act
+# The transitions are the same whoever the actor is; the accessor enforces the actor
+# at the call and the enforcer audits it from the closed-by comment.
+transitions:
+  submitted:       [working, done, input-required, auth-required, canceled, rejected]
+  working:         [done, input-required, auth-required, completed, failed, canceled]
+  done:            [completed, working, canceled, failed]
+  input-required:  [working, done, auth-required, canceled, failed]   # blocked on the sender -> blocked on a human, in one move (#216)
+  auth-required:   [working, done, canceled, rejected]     # leaving auth-required is a human's act
+  completed:       []
+  failed:          []
+  canceled:        []
+  rejected:        []
+
+rules:
+  - "Exactly one non-terminal state: label at a time."
+  - "A terminal state means the issue is CLOSED with the matching close reason."
+  - "Add the new state label BEFORE removing the old one: a label swap is not atomic, and a
+     double-labelled instant must still read unambiguously."
+  - "state:done means the recipient has finished and the sender must act: accept (close completed)
+     or send it back (working). state:input-required means the recipient is blocked. One meaning each."
+  - "state:auth-required is a hold on a HUMAN — a decision, input or authorization. Either party may
+     set it, with a comment saying what the human must do. Only a human clears it; the enforcer
+     re-applies it and alarms if anyone else does. Nobody is rung; the driver escalates held tasks
+     to the operator every URB_HOLD_REMIND with their age, and a held task is not in flight."
+  - "rings: is the doorbell policy. A state with rings: recipient wakes the to: agent, rings: sender
+     the from: agent, rings: human nobody (escalation instead), rings: none nobody."
+  - "--apply never deletes a label it does not declare. The ten GitHub defaults stay; issue #10
+     already carries `bug`."
