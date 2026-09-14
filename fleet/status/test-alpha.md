@@ -1,7 +1,7 @@
 ---
 agent: test-alpha
 updated: 2026-09-14
-state: available
+state: working
 ---
 
-Synthetic status for the publish-path comparison (PLAN-V006 2.4). Nothing real.
+Synthetic status for #1004 (PLAN-V006). Nothing real.
