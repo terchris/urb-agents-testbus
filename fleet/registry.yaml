@@ -1,0 +1,9 @@
+schema_version: 1
+description: TEST BUS (PLAN-V006). Synthetic identities only. Nothing here is a fleet agent; nothing here is rung on a real host.
+agents:
+  - test-alpha
+  - test-bravo
+  # in the registry, not in the roster: the unringable case
+  - test-charlie
+  - urb-agents-maintainer
+  - terje
